@@ -534,3 +534,47 @@ class BelongsToDependentTest < BulkDestroyerTest
     assert_equal 1, events(:commit, "Clip").size
   end
 end
+
+class ThroughCollectionGuardTest < BulkDestroyerTest
+  def setup_course
+    course = Course.create!
+    other = Course.create!
+    students = 2.times.map { |i| Student.create!(name: "s#{i}") }
+    students.each { |st| Enrollment.create!(course: course, student: st) }
+    Enrollment.create!(course: other, student: students.first)
+    course
+  end
+
+  def test_bulk_destroy_all_on_a_through_collection_is_refused_and_deletes_nothing
+    course = setup_course
+    error = assert_raises(BulkDestroyer::UnsupportedAssociation) { course.students.bulk_destroy_all }
+    assert_match(/Course#students/, error.message)
+    assert_match(/Course#enrollments/, error.message)
+    assert_equal [2, 3], [Student.count, Enrollment.count]
+  end
+
+  def test_through_collection_is_refused_with_a_custom_batch_size
+    course = setup_course
+    assert_raises(BulkDestroyer::UnsupportedAssociation) { course.students.bulk_destroy_all(batch_size: 10) }
+    assert_equal 2, Student.count
+  end
+
+  def test_direct_collection_and_join_model_still_work
+    course = setup_course
+    course.enrollments.bulk_destroy_all
+    assert_equal [2, 1], [Student.count, Enrollment.count], "join rows go, students and other course stay"
+  end
+
+  def test_far_side_model_relation_still_works
+    setup_course
+    Enrollment.delete_all
+    Student.where(name: "s0").bulk_destroy_all
+    assert_equal 1, Student.count
+  end
+
+  def test_habtm_collection_is_refused_too
+    post = build_post
+    assert_raises(BulkDestroyer::UnsupportedAssociation) { post.labels.bulk_destroy_all }
+    assert_equal 1, Label.count
+  end
+end

@@ -83,6 +83,19 @@ and, for `delete_all`/`nullify`/`restrict`, composite foreign keys and instance-
 (`-> (owner) { ... }`). (`dependent: :destroy` goes through Rails' preloader and does not have the
 last two limits.)
 
+**Calling `bulk_destroy_all` directly on a `has_many :through` or HABTM collection** (`course.students.bulk_destroy_all`)
+is refused too. Rails' own `course.students.destroy_all` removes only the join rows and keeps the students, whereas a
+relation-level destroy would delete the `Student` records themselves, for every course they are enrolled in. The error
+tells you which call you meant:
+
+```ruby
+course.enrollments.bulk_destroy_all          # remove the join rows only (what Rails' destroy_all does)
+Student.where(...).bulk_destroy_all          # really destroy the Students
+```
+
+(`course.students.where(...).bulk_destroy_all` is a plain relation of `Student` and, like Rails' own
+`course.students.where(...).destroy_all`, destroys those students.)
+
 ## Configuration
 
 ```ruby
@@ -144,7 +157,8 @@ strategies against identical, freshly seeded data:
 
 It first asserts that all three leave the same rows behind and fire exactly the same hook calls, then asserts that
 `bulk_destroy_all` issues at least 10x fewer queries and is faster. Size and database are configurable:
-`BENCH_POSTS=1000 BENCH_COMMENTS=5 BULK_DESTROYER_DB=postgresql rake bench`. It is skipped by `rake test`. The same file also has a test that destroys the 35,700-record tree described
+`BENCH_POSTS=1000 BENCH_COMMENTS=5 BULK_DESTROYER_DB=postgresql rake bench`. It is skipped by `rake test`. 
+The same file also has a test that destroys the 35,700-record tree described
 under [The Fiber ceiling](#the-fiber-ceiling-and-max_batch_records) with default settings.
 
 Single runs on a small cloud VM, Rails 8.1.3.1, Ruby 3.4.8, database on the same machine:
@@ -169,25 +183,28 @@ same per-record queries; the loop only avoids loading every record at once.
 
 ## Compatibility
 
-Supports Rails **7.1 through 8.2** (`activerecord >= 7.1, < 8.3`). The full suite (44 tests, foreign keys
-enforced) passes unchanged on:
+Supports Rails **7.1 through 8.2** (`activerecord >= 7.1, < 8.3`) on Ruby **3.2 and newer**. The suite
+(49 tests, foreign keys enforced) passes unchanged on:
 
 | Rails | SQLite 3 | PostgreSQL 16 | MariaDB 10.11 |
 |---|---|---|---|
 | 7.1.6 | pass | not run | not run |
 | 7.2.4 | pass | not run | not run |
 | 8.0.5 | pass | not run | not run |
-| 8.1.3.1 | pass | pass | not run |
-| 8.2.0.alpha (main) | pass | pass (first 22 tests; `belongs_to` tests not run) | pass (first 22 tests; `belongs_to` tests not run) |
+| 8.1.3.1 | pass | pass  | not run |
+| 8.2.0.alpha (main) | pass | pass (first 22 tests only) | pass (first 22 tests only) |
 
-Ruby was only tested on 3.4; the `>= 3.1` floor in the gemspec is an assumption (Rails itself enforces
-its own Ruby floor). Oracle and SQL Server are unverified (IN-list ceilings are built in, nothing has been run there).
+CI runs the suite on SQLite for Ruby 3.2, 3.3 and 3.4 against Rails 7.1, 7.2, 8.0 and 8.1. Ruby 3.1 and
+Rails 8.2 are not in the CI matrix. Other adapters (MySQL, Oracle, SQL Server) use the same ActiveRecord
+APIs and have adapter-specific IN-list limits built in, but nothing has been run on Oracle or SQL Server.
+Results from other databases are welcome.
 
 **Rails 7.0 and earlier are not supported.** In 7.0 the connection lock is held by the calling fiber for the
 whole transaction, so any hook that runs a query inside a hook Fiber raises
 `ThreadError: deadlock; lock already owned by another fiber`. Rails 7.1 changed that locking. On 7.0,
-`BulkDestroyer.hook_mode = :inline` avoids Fibers (in an earlier 22-test run, 20 passed; the other two assert the
-post-DELETE `after_destroy` timing that inline mode intentionally gives up), but this is not a supported configuration.
+`BulkDestroyer.hook_mode = :inline` avoids Fibers (in an earlier 22-test run, 20 passed; the other two assert
+the post-DELETE `after_destroy` timing that inline mode intentionally gives up), but this is not a supported
+configuration.
 
 Version differences handled internally: `Model.with_connection` (7.2+, falls back to `connection` on 7.1) and
 `counter_cached_association_names` (7.2+, falls back to the `belongs_to` reflections on 7.1).
